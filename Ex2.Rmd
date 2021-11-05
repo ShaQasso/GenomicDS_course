@@ -73,9 +73,9 @@ heatmap_500 <- pheatmap(tpm[selectedGenes_V,],
                         silent = TRUE,
                         show_rownames = FALSE)
 
-selectedGenes <- names(V[order(V, decreasing = TRUE)][1:100])
+selectedGenes_V100 <- names(V[order(V, decreasing = TRUE)][1:100])
 
-heatmap_100 <- pheatmap(tpm[selectedGenes_V,], 
+heatmap_100 <- pheatmap(tpm[selectedGenes_V100,], 
                         scale = 'row', 
                         main = "100 most variable genes",
                         silent = TRUE,
@@ -159,14 +159,14 @@ M <- log2(M + 1)
 pcaResults = prcomp(M)
 
 PCA_S <- autoplot(pcaResults, data = metadata, colour = 'group', size = 5) +
-  ggtitle("PCA of 100 genes of highest total expression") +
+  ggtitle("PCA of 100 genes of \n highest total expression") +
   theme_pubr(legend = "bottom")
 
 M <- t(tpm[selectedGenes_V,])
 M <- log2(M + 1)
 pcaResults = prcomp(M)
 PCA_V <- autoplot(pcaResults, data = metadata, colour = 'group', size = 5)+
-    ggtitle("PCA of top 500 most variable genes") +
+    ggtitle("PCA of top 500 \n most variable genes") +
   theme_pubr(legend = "bottom")
 
 PCA_V + PCA_S
