@@ -244,6 +244,6 @@ com/llendway/github_for_collaboration/blob/master/github_for_collaboration.md
 Rtudio (Please upload the answers to the exercises also to Moodle) .
 10. Insert the link to your Github account here.
 
-
+https://github.com/ShaQasso/GenomicDS_course
 
 
