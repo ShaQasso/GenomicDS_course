@@ -1,0 +1,249 @@
+---
+title: "Ex2"
+author:
+        - "Shaqed Carasso" 
+        - "ID: 201281805"
+date: "10/28/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(pheatmap)
+library(patchwork)
+library(grid)
+library(gridExtra)
+library(stats)
+library(corrplot)
+library(ggplot2)
+library(ggfortify)
+library(ggpubr)
+
+
+
+```
+
+## Exploring the count tables
+Importing the example expression data.
+
+```{r }
+counts_file <- system.file("extdata/rna-seq/SRP029880.raw_counts.tsv",
+package = "compGenomRData")
+coldata_file <- system.file("extdata/rna-seq/SRP029880.colData.tsv",
+package = "compGenomRData")
+
+counts <- read.table(counts_file, header = T, sep = '\t')
+metadata <-  read.table(coldata_file, header = T, sep = '\t', 
+                      stringsAsFactors = TRUE)
+```
+
+1. Normalize the counts using the TPM approach.
+```{r }
+
+geneLengths <- counts[,"width"]
+
+counts <- counts %>%
+        select(-width)
+        
+rpk <- apply(counts, 2, 
+              function(x) as.numeric(x)/(geneLengths/1000))
+tpm <- apply(rpk, 2, function(x) as.numeric(x) / sum(as.numeric(x)) * 10^6)
+rownames(tpm) = rownames(counts)
+
+
+head(tpm)
+
+```
+
+2. Plot a heatmap of the top 500 most variable genes. Compare with the heatmap obtained using the
+100 most variable genes. 
+
+```{r }
+
+V <- apply(tpm, 1, var)
+
+selectedGenes_V <- names(V[order(V, decreasing = TRUE)][1:500])
+
+heatmap_500 <- pheatmap(tpm[selectedGenes_V,], 
+                        scale = 'row', 
+                        main = "500 most variable genes",
+                        silent = TRUE,
+                        show_rownames = FALSE)
+
+selectedGenes <- names(V[order(V, decreasing = TRUE)][1:100])
+
+heatmap_100 <- pheatmap(tpm[selectedGenes_V,], 
+                        scale = 'row', 
+                        main = "100 most variable genes",
+                        silent = TRUE,
+                        show_rownames = FALSE)
+
+```
+```{r echo=FALSE}
+plot_list=list()
+plot_list[['heatmap_500']]=heatmap_500[[4]]
+plot_list[['heatmap_100']]=heatmap_100[[4]]
+
+grid.arrange(grobs=plot_list, ncol=2)
+
+```
+
+3. Re-do the heatmaps setting the scale argument to none, and column. Compare the results with scale
+= 'row'.  
+
+*Scaling is important! scaling by row means we scale the counts for each gene separately, so we can compare the specific gene's expression levels between the samples.*
+*Scaling by columns means we scale the counts for each sample separately, which is not very informative as in each sample the genes are expressed in different scales, some having much more transcripts than others.*
+
+```{r }
+
+selectedGenes_V <- names(V[order(V, decreasing = TRUE)][1:500])
+
+heatmap_no_scale <- pheatmap(tpm[selectedGenes_V,], 
+                        scale = 'none', 
+                        main = "No scaling",
+                        silent = TRUE,
+                        show_rownames = FALSE)
+
+heatmap_col_sacle <- pheatmap(tpm[selectedGenes_V,], 
+                        scale = 'column', 
+                        main = "Scale by columns",
+                        silent = TRUE,
+                        show_rownames = FALSE)
+
+```
+```{r echo=FALSE}
+plot_list=list()
+plot_list[['heatmap_no_scale']]=heatmap_no_scale[[4]]
+plot_list[['heatmap_col_sacle']]=heatmap_col_sacle[[4]]
+
+grid.arrange(grobs=plot_list, ncol=2)
+
+```  
+
+4. Draw a correlation plot for the samples depicting the sample differences as ‘ellipses’, drawing only the
+upper end of the matrix, and order samples by hierarchical clustering results based on average linkage
+clustering method. 
+
+```{r}
+correlationMatrix <- cor(tpm)
+correlationMatrix
+```
+
+```{r}
+corrplot(correlationMatrix, 
+         type = "upper",
+         method = "ellipse",
+         order = 'hclust', 
+         hclust.method = "average",
+         number.cex = 0.7) 
+
+
+```
+
+5. How else could the count matrix be subsetted to obtain quick and accurate clusters? Try selecting the
+top 100 genes that have the highest total expression in all samples and re-draw the cluster heatmaps
+and PCA plots. 
+
+
+```{r}
+S <- apply(tpm, 1, sum)
+selectedGenes_S <- names(S[order(S, decreasing = TRUE)][1:100])
+```
+
+```{r}
+M <- t(tpm[selectedGenes_S,])
+M <- log2(M + 1)
+pcaResults = prcomp(M)
+
+PCA_S <- autoplot(pcaResults, data = metadata, colour = 'group', size = 5) +
+  ggtitle("PCA of 100 genes of highest total expression") +
+  theme_pubr(legend = "bottom")
+
+M <- t(tpm[selectedGenes_V,])
+M <- log2(M + 1)
+pcaResults = prcomp(M)
+PCA_V <- autoplot(pcaResults, data = metadata, colour = 'group', size = 5)+
+    ggtitle("PCA of top 500 most variable genes") +
+  theme_pubr(legend = "bottom")
+
+PCA_V + PCA_S
+
+```
+
+```{r }
+heatmap_V <- pheatmap(tpm[selectedGenes_V,], 
+                        scale = 'row', 
+                        main = "top 500 most variable genes",
+                        silent = TRUE,
+                        show_rownames = FALSE)
+
+heatmap_S <- pheatmap(tpm[selectedGenes_S,], 
+                        scale = 'row', 
+                        main = "100 genes of highest total expression",
+                        silent = TRUE,
+                        show_rownames = FALSE)
+
+```
+```{r echo=FALSE}
+plot_list=list()
+plot_list[['heatmap_V']]=heatmap_V[[4]]
+plot_list[['heatmap_S']]=heatmap_S[[4]]
+
+grid.arrange(grobs=plot_list, ncol=2)
+
+
+```
+
+
+6. Add an additional column to the annotation data.frame object to annotate the samples and use the
+updated annotation data.frame to plot the heatmaps. (Hint: Assign different batch values to CASE and
+CTRL samples). Make a PCA plot and color samples by the added variable (e.g. batch). 
+
+```{r }
+
+metadata$batch <- "Control"
+
+metadata$batch[metadata$group == "CASE"] <- "Case"
+
+heatmap_annotated <- pheatmap(tpm[selectedGenes_S,], 
+                        scale = 'row', 
+                        main = "Annotated",
+                        annotation_col = metadata[,c('batch','group')],
+                        cutree_cols = 2,
+                        show_rownames = FALSE)
+
+
+```
+
+
+7. Try making the heatmaps using all the genes in the count table, rather than sub-selecting. 
+*It returns an error* 
+```Error in hclust(d, method = method) : NA/NaN/Inf in foreign function call (arg 10)```  
+*We need to filter genes that have 0 reads across all samples*
+
+```{r }
+tpm_filt <- as.data.frame(tpm) %>% filter(across(everything(.)) != 0)
+
+heatmap_full <- pheatmap(tpm_filt, 
+                        scale = 'row', 
+                        main = "All genes with >0 counts across all samples",
+                        annotation_col = metadata[,c('batch','group')],
+                        cutree_cols = 2,
+                        show_rownames = FALSE)
+```
+
+
+## Exploring the count tables
+
+8. Open Github account, and install git if it required as instructed in the following link: https://github.
+com/llendway/github_for_collaboration/blob/master/github_for_collaboration.md
+9. Create a repository and commit and push the answers of this exercise and the next exercises through
+Rtudio (Please upload the answers to the exercises also to Moodle) .
+10. Insert the link to your Github account here.
+
+
+
+
