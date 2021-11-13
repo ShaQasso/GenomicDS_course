@@ -3,7 +3,7 @@ title: "Ex2"
 author:
         - "Shaqed Carasso" 
         - "ID: 201281805"
-date: "10/28/2021"
+date: "07/11/2021"
 output: html_document
 editor_options: 
   chunk_output_type: console
