@@ -1,0 +1,260 @@
+---
+title: "Ex7"
+author:
+        - "Shaqed Carasso" 
+        - "ID: 201281805"
+date: "21/12/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Classification
+
+For this set of exercises we will be using the gene expression and patient annotation data from the glioblastoma patient.The glioblastoma tumor samples are from The Cancer Genome Atlas project. We will try to predict the subtype of this disease using molecular markers. This subtype is characterized by large-scale epigenetic alterations called the “CpG island methylator phenotype” or “CIMP”
+
+```{r}
+library(compGenomRData)
+# get file paths
+fileLGGexp=system.file("extdata",
+                      "LGGrnaseq.rds",
+                      package="compGenomRData")
+fileLGGann=system.file("extdata",
+                      "patient2LGGsubtypes.rds",
+                      package="compGenomRData")
+# gene expression values
+gexp=readRDS(fileLGGexp)
+
+# patient annotation
+patient=readRDS(fileLGGann)
+
+head(gexp[,1:5])
+dim(gexp)
+
+head(patient)
+dim(patient)
+
+
+```
+
+1. Our first task is to not use any data transformation and do classification. Run the k-NN classifier on the data without any transformation or scaling. What is the effect on classification accuracy for k-NN predicting the CIMP and noCIMP status of the patient? 
+
+
+Here we will preprocess the data before we start training. This might include exploratory data analysis to see how variables and samples relate to each other. For example, we might want to check the correlation between predictor variables and keep only one variable from that group. In addition, some training algorithms might be sensitive to data scales or outliers. We should deal with those issues in this step. In some cases, the data might have missing values. We can choose to remove the samples that have missing values or try to impute them. Many machine learning algorithms will not be able to deal with missing values.
+
+```{r}
+library(caret)
+# With transformation and scaling
+
+# The first thing we will do is data normalization and transformation. We have to take care of data scale issues that might come from how the experiments are performed and the potential problems that might occur during data collection. Ideally, each tumor sample has a similar distribution of gene expression values. Systematic differences between tumor samples must be corrected. We check if there are such differences using box plots. We will only plot the first 50 tumor samples so that the figure is not too squished
+
+boxplot(gexp[,1:50],outline=FALSE,col="cornflowerblue")
+
+#It seems there was some normalization done on this data. Gene expression values per sample seem to have the same scale. However, it looks like they have long-tailed distributions, so a log transformation may fix that. These long-tailed distributions have outliers and this might adversely affect the models. Below, we show the effect of log transformation on the gene expression profile of a patient. We add a pseudo count of 1 to avoid log(0)
+
+par(mfrow=c(1,2))
+hist(gexp[,5],xlab="gene expression",main="",border="blue4",
+     col="cornflowerblue")
+hist(log10(gexp+1)[,5], xlab="gene expression log scale",main="",
+     border="blue4",col="cornflowerblue")
+
+#Since taking a log seems to work to tame the extreme values, we do that below and also add 1 pseudo-count to be able to deal with 0 values:
+gexp=log10(gexp+1)
+
+# transpose the data set
+tgexp <- t(gexp)
+
+# filter predictor variables which have low variation
+#The more variables, the slower the algorithms will be generally.
+
+# remove near zero variation for the columns at least
+# 85% of the values are the same
+# this function creates the filter but doesn't apply it yet
+nzv=preProcess(tgexp,method="nzv",uniqueCut = 15)
+
+# apply the filter using "predict" function
+# return the filtered dataset and assign it to nzv_tgexp
+# variable
+nzv_tgexp=predict(nzv,tgexp)
+
+dim(tgexp)
+dim(nzv_tgexp)
+
+tgexp <- nzv_tgexp
+
+# In addition, we can also choose arbitrary cutoffs for variability. For example, we can choose to take the top 1000 variable predictors.
+SDs=apply(tgexp,2,sd )
+topPreds=order(SDs,decreasing = TRUE)[1:1000]
+tgexp=tgexp[,topPreds]
+
+# We can scale the data. When we scale, each value of the predictor variable is divided by its standard deviation. Therefore predictor variables will have the same standard deviation. These manipulations are generally used to improve the numerical stability of some calculations. In distance-based metrics, it could be beneficial to at least center the data. We will now center the data using the preProcess() function. This is more practical than the scale() function because when we get a new data point, we can use the predict() function and processCenter object to process it just like we did for the training samples.
+
+processCenter=preProcess(tgexp, method = c("center"))
+tgexp=predict(processCenter,tgexp)
+
+# create a filter for removing higly correlated variables
+# if two variables are highly correlated only one of them
+# is removed
+corrFilt=preProcess(tgexp, method = "corr",cutoff = 0.9)
+tgexp=predict(corrFilt,tgexp)
+
+# For demonstration purposes, we will now introduce NA values in our data, the “NA” value is normally used to encode missing values in R. We then show how to check and deal with those. One way is to impute them; here, we again use a machine learning algorithm to guess the missing values. Another option is to discard the samples with missing values or discard the predictor variables with missing values. First, we replace one of the values as NA and check if it is there.
+
+missing_tgexp=tgexp
+missing_tgexp[1,1]=NA
+anyNA(missing_tgexp) # check if there are NA values
+
+gexpnoNA=missing_tgexp[ , colSums(is.na(missing_tgexp)) == 0]
+
+
+# We will next try to impute the missing value(s). Imputation can be as simple as assigning missing values to the mean or median value of the variable, or assigning the mean/median of values from nearest neighbors of the sample having the missing value. We will show both using the caret::preProcess() function. First, let us run the median imputation.
+
+mImpute=preProcess(missing_tgexp,method="medianImpute")
+imputedGexp=predict(mImpute,missing_tgexp)
+
+# Splitting the data - into the test and the training partitions. The reason for this is that we need an independent test we did not train on. 
+
+tgexp=merge(patient,tgexp,by="row.names")
+
+# push sample ids back to the row names
+rownames(tgexp)=tgexp[,1]
+tgexp=tgexp[,-1]
+
+# There are multiple data split strategies. For starters, we will split 30% of the data as the test. This method is the gold standard for testing performance of our model.
+
+set.seed(3031)
+intrain <- createDataPartition(y = tgexp[,1], p= 0.7)[[1]]
+
+# seperate test and training sets
+training <- tgexp[intrain,]
+testing <- tgexp[-intrain,]
+
+knnFit=knn3(x=training[,-1], # training set
+            y=training[,1], # training set class labels
+            k=5)
+# predictions on the test set
+trainPred=predict(knnFit,testing[,-1])
+
+# predictions on the training set
+trainPred=predict(knnFit,training[,-1],type="class")
+
+# compare the predicted labels to real labels
+# get different performance metrics
+confusionMatrix(data=training[,1],reference=trainPred)
+
+# predictions on the test set, return class labels
+testPred=predict(knnFit,testing[,-1],type="class")
+
+# compare the predicted labels to real labels
+# get different performance metrics
+confusionMatrix(data=testing[,1],reference=testPred)
+
+```
+
+
+```{r}
+# Without any transformation or scaling
+set.seed(3031)
+
+tgexp_non <- t(gexp)
+
+tgexp_non=merge(patient,tgexp_non,by="row.names")
+
+# push sample ids back to the row names
+rownames(tgexp_non)=tgexp_non[,1]
+tgexp_non=tgexp_non[,-1]
+
+
+intrain <- createDataPartition(y = tgexp_non[,1], p= 0.7)[[1]]
+
+# seperate test and training sets
+training_non <- tgexp_non[intrain,]
+testing_non <- tgexp_non[-intrain,]
+
+knnFit=knn3(x=training_non[,-1], # training set
+            y=training_non[,1], # training set class labels
+            k=5)
+# predictions on the test set
+trainPred=predict(knnFit,testing_non[,-1])
+
+# predictions on the training set
+trainPred=predict(knnFit,training_non[,-1],type="class")
+
+# compare the predicted labels to real labels
+# get different performance metrics
+confusionMatrix(data=training_non[,1],reference=trainPred)
+
+# predictions on the test set, return class labels
+testPred=predict(knnFit,testing_non[,-1],type="class")
+
+# compare the predicted labels to real labels
+# get different performance metrics
+confusionMatrix(data=testing_non[,1],reference=testPred)
+
+```
+*Comparing the accuracy measures, we can see that without transformations and scaling, our model was over-fitted to the training data, and dropped in accuracy trying to predict on the test set. *
+
+
+### Regression
+
+For this set of problems we will use the regression data set where we tried to predict the age of the sample from the methylation values. The data can be loaded as shown below:
+
+*Tuned a grid to get the best mtry and min.node.size. *
+
+```{r}
+# file path for CpG methylation and age
+fileMethAge=system.file("extdata",
+                      "CpGmeth2Age.rds",
+                      package="compGenomRData")
+
+# read methylation-age table
+ameth=readRDS(fileMethAge)
+```
+
+2. Run random forest regression and plot the importance metrics.
+```{r}
+
+# Take the top 5000 variable predictors.
+SDs=apply(ameth,2,sd)
+topPreds=order(SDs,decreasing = TRUE)[1:5000]
+ameth=ameth[,topPreds]
+
+# seperate test and training sets
+
+set.seed(3031)
+intrain <- createDataPartition(y = ameth[,1], p= 0.7)[[1]]
+
+training <- ameth[intrain,]
+testing <- ameth[-intrain,]
+
+trctrl <- trainControl(method = "cv",number=5)
+
+# we will now train random forest model
+rfFit <- train(Age ~ ., 
+               data = training, 
+               method = "ranger",
+               trControl=trctrl,
+               importance="permutation", # calculate importance
+               tuneGrid = data.frame(mtry=19,
+                                     min.node.size = 9,
+                                     splitrule="variance"))
+
+
+
+# print OOB error
+rfFit$finalModel$prediction.error
+
+# check prediction RMSE value
+testPred <- predict(rfFit , testing)
+RMSE(testPred,testing$Age)
+
+```
+
+```{r}
+plot(varImp(rfFit),top=10)
+```
+
