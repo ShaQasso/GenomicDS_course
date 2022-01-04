@@ -1,0 +1,99 @@
+---
+title: "Ex9"
+author:
+        - "Shaqed Carasso" 
+        - "ID: 201281805"
+date: "04/01/2022"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r include=FALSE}
+# Load packages
+# Please install missing packages if needed
+
+library("dplyr")
+library("ggplot2")
+library("viridis")
+library("tibble")
+library("gridExtra")
+library("stringr")
+library("depmap")
+library("ExperimentHub")
+library(ggrepel)
+library(ggpubr)
+```
+
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# accessing Depmap data using *ExperimentHub* package 
+
+eh <- ExperimentHub()
+query(eh, "depmap")
+rnai <- eh[["EH3080"]]
+metadata <- eh[["EH3086"]]
+TPM <- eh[["EH3084"]]
+copyNumber <- eh[["EH3082"]]
+
+```
+
+### Home work
+1. Make a scatter plot of expression vs rnai gene dependency for Rhabdomyosarcoma Sarcoma.
+
+```{r}
+
+meta_rnai2 <- metadata %>%
+  select(depmap_id, cell_line,
+         primary_disease, subtype_disease) %>%
+  filter(primary_disease == "Sarcoma",
+         subtype_disease == "Rhabdomyosarcoma") %>%
+  left_join(rnai, by = "depmap_id") %>%
+  left_join((TPM %>%
+               select(depmap_id, entrez_id,
+                      expression)),
+            by = c("depmap_id", "entrez_id")) %>% 
+  filter(!is.na(expression)) %>%
+  filter(!is.na(dependency))
+
+
+
+ggplot(meta_rnai2, aes(x = dependency , y = expression)) +
+        geom_point(alpha = 0.3, size = 1)+
+        geom_label_repel(data = filter(meta_rnai2, dependency <= -2),
+                   aes(label = gene_name), 
+                   size = 3, 
+                   label.size = 0.1, 
+                   fontface = 'bold'
+                   #,
+                   #label.padding = 0.1
+                   ) +   
+  labs(title = "Expression vs rnai gene dependency for Rhabdomyosarcoma Sarcoma",
+       y = "Experssion (TPM)")+
+  theme_minimal() 
+
+
+
+```
+
+2. Make a boxplot displaying log genomic copy number for gene RPL14 by lineage
+
+```{r}
+
+metadata %>%
+  select(depmap_id, lineage) %>%
+  full_join(copyNumber, by = "depmap_id") %>%
+  filter(gene_name == "RPL14") %>%
+  ggplot(aes(x = lineage, y = log_copy_number, fill = lineage)) +
+  geom_boxplot(alpha = 0.5) +
+  ggtitle("Log genomic copy numbers for gene RPL14 in different lineages") +
+  labs(y = "log copy number",
+       x = NULL)+
+  theme_pubr(legend = "none") +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
