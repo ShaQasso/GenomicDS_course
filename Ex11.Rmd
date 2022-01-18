@@ -1,0 +1,100 @@
+---
+title: "Ex11"
+author:
+        - "Shaqed Carasso" 
+        - "ID: 201281805"
+date: "18/01/2022"
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+# Pseudotime Cell Trajectories
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	fig.align = "center"
+)
+```
+
+```{r include=FALSE}
+library(SingleCellExperiment)
+library(destiny)
+library(scater)
+library(ggplot2)
+library(ggthemes) 
+library(ggbeeswarm) 
+library(dplyr)
+library(cowplot)
+library(knitr)
+
+set.seed(1)  # set a seed for your random number generator to get reproducible results 
+
+```
+
+# Homework
+1.  Try separating the cell types using other PCs. How does the separation look?
+```{r echo=TRUE}
+# Read in single cell data.
+path.deng <- c("deng-reads.rds")
+
+deng_SCE <- readRDS(path.deng)
+
+# Re-order the levels of the factor storing the cell developmental stage.
+deng_SCE$cell_type2 <- factor(deng_SCE$cell_type2,
+                              levels = c("zy", "early2cell", "mid2cell", "late2cell", 
+                                         "4cell", "8cell", "16cell", "earlyblast", "midblast",
+                                         "lateblast"))
+
+# Run PCA on Deng data. Use the runPCA function from the SingleCellExperiment package.
+deng_SCE <- runPCA(deng_SCE, ncomponents = 50) # ncomponents is a numeric scalar indicating the number of principal components to obtain.
+
+# Use the reducedDim function to access the PCA and store the results. 
+pca <- reducedDim(deng_SCE, "PCA")
+
+# Add PCA data to the deng_SCE object.
+deng_SCE$PC1 <- pca[, 1]
+deng_SCE$PC2 <- pca[, 2]
+
+# Plot PC biplot with cells colored by cell_type2. 
+
+ggplot(as.data.frame(colData(deng_SCE)), aes(x = PC1, y = PC2, color = cell_type2)) + geom_quasirandom(groupOnX = FALSE) +
+    scale_color_tableau() + theme_classic() +
+    xlab("PC1") + ylab("PC2") + ggtitle("PC biplot")
+
+# Plot PC2 vs cell_type2. 
+deng_SCE$pseudotime_PC2 <- rank(deng_SCE$PC2)  # rank cells by their PC1 score
+ggplot(as.data.frame(colData(deng_SCE)), aes(x = pseudotime_PC2, y = cell_type2, 
+                                             colour = cell_type2)) +
+    geom_quasirandom(groupOnX = FALSE) +
+    scale_color_tableau() + theme_classic() +
+    xlab("PC2") + ylab("Timepoint") +
+    ggtitle("Cells ordered by first principal component")
+
+```
+
+2. Try different sigma values when making diffusion map.
+```{r}
+
+
+deng <- logcounts(deng_SCE)  # access log-transformed counts matrix
+cellLabels <- deng_SCE$cell_type2
+colnames(deng) <- cellLabels
+
+
+dm <- DiffusionMap(t(deng), sigma = "local")  # use local option to set sigma
+sigmas <- find_sigmas(t(deng), verbose = FALSE)  # find optimal sigma
+dm <- DiffusionMap(t(deng), sigma = optimal_sigma(sigmas))  
+
+# Plot diffusion component 1 vs diffusion component 2 (DC1 vs DC2). 
+tmp <- data.frame(DC1 = eigenvectors(dm)[, 1],
+                  DC2 = eigenvectors(dm)[, 2],
+                  Timepoint = deng_SCE$cell_type2)
+ggplot(tmp, aes(x = DC1, y = DC2, colour = Timepoint)) +
+    geom_point() + scale_color_tableau() + 
+    xlab("Diffusion component 1") + 
+    ylab("Diffusion component 2") +
+    theme_classic()
+
+
+```
