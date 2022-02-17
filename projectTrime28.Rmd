@@ -26,7 +26,10 @@ library(limma)
 library(reshape2)
 library(RColorBrewer)
 library(corrplot)
-library("org.Mm.eg.db")
+library(EnhancedVolcano)
+library(patchwork)
+library(clusterProfiler)
+
 ```
 
 ## Open files, create counts and metadata tables, visualize library sizes
@@ -46,7 +49,7 @@ metadata <-  read.table(coldata_file, row.names = 1, header = T, sep = '\t',
 keep a 'dictionary of gene ids and names, then remove gene names from counts file
 
 ```{r}
-geneNames <- as.data.frame(counts[,"Gene.Name"])
+geneNames <- as.data.frame(counts[, "Gene.Name"])
 geneNames$Gene.ID <- rownames(counts)
 geneNames <- geneNames %>% rename('counts[, "Gene.Name"]'= "Gene.Name")
 counts <- subset( counts, select = -Gene.Name)
@@ -81,7 +84,7 @@ ggplot(metadata, aes(fill = Group)) +
 ```
 
 
-Normalize to CPM, exclude lowly expressed genes:
+Normalize to CPM, exclude lowly expressed genes (less than 0.5 CPM in all samples:
 
 ```{r}
 cpm <- apply(counts, 2, 
@@ -89,7 +92,8 @@ cpm <- apply(counts, 2,
 
 colSums(cpm)
 
-keep <- rowMeans(cpm) > 0.3
+keep <- rowMeans(cpm) >= 30
+
 table(keep)
 
 counts.filtered = counts[keep,]
@@ -123,6 +127,8 @@ Create DeseQ object, comapring Groups with Sex as a confounding factor:
 
 ```{r}
 metadata_filtered_samples <- subset(metadata, row.names(metadata) != ("ERR4873315"))
+#metadata_filtered_samples <- subset(metadata_filtered_samples, Sex != "male")
+
 subset_Samples <- as.vector(rownames(metadata_filtered_samples))
 subset_reads <- counts.filtered[, subset_Samples]
 
@@ -132,6 +138,7 @@ countdata.deseq <- DESeq2::DESeqDataSetFromMatrix(countData = subset_reads,
 
 
 dds <- DESeq(countdata.deseq)
+
 # Extract the normalized counts
 countdata_normalized_counts <- counts(dds, normalized = TRUE)
 ```
@@ -160,30 +167,36 @@ ggplot(pcaData, aes(x = PC1, y = PC2, color = Group)) +
         xlab(paste0("PC1: ", percentVar[1], "%")) + 
         ylab(paste0("PC2: ", percentVar[2], "%")) +
         #geom_text(label = rownames(pcaData), size = 4, nudge_y = 0.2, show.legend = FALSE)+
-        stat_ellipse(geom = "polygon", type="norm", alpha=0.1, aes(fill=Group)) +
+        #stat_ellipse(geom = "polygon", type="norm", alpha=0.1, aes(fill=Group)) +
         labs(color = "Group") +
         guides(color = guide_legend(order = 1),
                shape = guide_legend(order = 2))+
         scale_fill_manual(values=met.brewer("Isfahan1", 2), guide = NULL) +
         scale_color_manual(values=met.brewer("Isfahan1", 2)) +
-        theme_pubr(legend = "right")
-        
+        theme_pubr(legend = "top")
+                
 ```
 deseq results
 
 ```{r}
 
-res <- results(dds, 
+res_Group <- results(dds, 
                contrast = c("Group", "Trim28KO", 'WT'), 
                alpha = 0.05, 
                lfcThreshold = 0)
 
+summary(res_Group)
+
+res_Sex <- results(dds, 
+               contrast = c("Sex", "male", 'female'), 
+               alpha = 0.05, 
+               lfcThreshold = 0)
 
 
-summary(res)
+summary(res_Sex)
 
 
-hist(res$pvalue[res$baseMean > 1], breaks = 0:20/20,
+hist(res_Group$pvalue[res_Group$baseMean > 1], breaks = 0:20/20,
      col = "grey50", border = "white")
 
 
@@ -195,36 +208,7 @@ resultsNames(dds)
 resLFC <- lfcShrink(dds, coef="Group_WT_vs_Trim28KO", type="apeglm")
 
 
-resLFC$entrez <- mapIds(org.Mm.eg.db,
-                     keys=rownames(resLFC),
-                     column="SYMBOL",
-                     keytype="ENSEMBL",
-                     multiVals="first")
-
-
-
-
-dds_res_all <- data.frame(res)
-
-dds_res_all_named <- left_join(rownames_to_column(dds_res_all), geneNames, by=c("rowname" = "Gene.ID"))
-
-
-ggplot() +
-        geom_point(data = dds_res_all, mapping = aes(x = log2FoldChange, y = -log10(pvalue)), 
-                   col = "grey80", pch = 21, size = 4) + 
-        geom_point(data = subset(dds_res_all, log2FoldChange < -0.58 & padj < 0.05),
-                   aes(log2FoldChange, -log10(pvalue)), color = "red", size = 4)  +
-        geom_point(data = subset(dds_res_all, log2FoldChange > 0.58 & padj < 0.05),
-                   aes(log2FoldChange, -log10(pvalue)), color = "green3", size = 4) +
-        #ggtitle("in-vitro -CD3 (red) vs none (green) \nsignificant genes are colored") +
-        geom_text(data = subset(dds_res_all, abs(log2FoldChange) > 1 & padj < 0.05),
-                  aes(log2FoldChange, -log10(pvalue), label = entrez), 
-                  vjust =1, size = 4)+
-        scale_color_manual(values=met.brewer("Isfahan1", 2)) +
-
-        theme_pubr()
-
-dds_res_all <- data.frame(res) %>% mutate(threshold = (padj < 0.05 & abs(log2FoldChange) >= 0.58)) %>%
+dds_res_all <- data.frame(res) %>% mutate(threshold = (padj < 0.05 & abs(log2FoldChange) >= 0)) %>%
         filter(!is.na(padj))
 
 
@@ -232,28 +216,134 @@ dds_res_all <- left_join(rownames_to_column(dds_res_all), geneNames, by=c("rowna
 
 
 ggplot(dds_res_all) + 
-        geom_point(aes(x = log2FoldChange, y = -log10(pvalue), color = threshold)) + 
+        geom_point(aes(x = log2FoldChange, y = -log10(padj), color = threshold)) + 
         xlab("log2 fold change") + 
         ylab("-log10 adjusted p-value") + 
         theme(legend.position = "none", 
               plot.title = element_text(size = rel(1.5), hjust = 0.5), 
               axis.title = element_text(size = rel(1.25)))+
         scale_color_manual(values=met.brewer("Isfahan1", 2)) +
-        #geom_text(data = subset(dds_res_all, abs(log2FoldChange) > 1 & padj < 0.05),
-        #          aes(log2FoldChange, -log10(pvalue), label = entrez), 
-         #         vjust =1, size = 4)+
+        geom_text(data = subset(dds_res_all, abs(log2FoldChange) > 3 & padj < 0.05),
+                  aes(log2FoldChange, -log10(padj), label = Gene.Name), 
+                  vjust =1, size = 4)+
         
-        
-        geom_text(data = subset(dds_res_all, Gene.Name %in% c("Elovl3", "Olr1", " Elovl7", " Klf14")),
-                  aes(log2FoldChange, -log10(pvalue), label = Gene.Name), 
-                  vjust =1, size = 4)
+        geom_text(data = subset(dds_res_all, Gene.Name %in% c("Elovl3", "Olr1", "Elovl7", "Klf14")),
+                  aes(log2FoldChange, -log10(padj), label = Gene.Name), 
+                  vjust =1, size = 4)+
+        scale_x_continuous(limits = c(-10,10))+
+        geom_hline(yintercept = -log10(0.05), linetype = 2)+
         theme_pubr(legend = "none")
+
+
+
 
 
 ```
 
 
 enrichment
+
+```{r}
+
+alpha = 0.05
+sigtab = dds_res_all %>% filter(padj < alpha)
+#order results by pvalues
+sigtab = sigtab[order(sigtab$pvalue),]
+head(sigtab)
+
+edgGene <- data.frame(sigtab[which((sigtab$log2FoldChange >= 0) & (sigtab$pvalue <= alpha)),1,drop=FALSE])
+geneList <- edgGene$rowname
+
+
+library("AnnotationDbi")
+library(org.Mm.eg.db)
+sigtab$ENTREZID_id = mapIds(org.Mm.eg.db,
+                            keys=sigtab$rowname, 
+                            column="ENTREZID",
+                            keytype="ENSEMBL",
+                            multiVals="first")
+
+detach("AnnotationDbi")
+
+gene_list<-na.omit(sigtab)
+
+original_gene_list <- gene_list$log2FoldChange
+
+names(original_gene_list) <-  gene_list$ENTREZID_id    
+
+
+
+geneList = sort(original_gene_list, decreasing = TRUE)
+```
+
+```{r}
+# Create background dataset for hypergeometric testing using all genes tested for significance in the results
+res_Group = res_Group[!is.na(res_Group$padj),]
+
+res_Group$ENTREZID_id = mapIds(org.Mm.eg.db,
+                            keys=rownames(res_Group), 
+                            column="ENTREZID",
+                            keytype="ENSEMBL",
+                            multiVals="first")
+
+all_genes <- rownames(res_Group$ENTREZID_id)
+# Extract significant results
+signif_res_up <- res_Group[res_Group$padj < 0.05 & (res_Group$log2FoldChange)>0 & !is.na(res_Group$padj), ]
+signif_genes_up <- signif_res_up$ENTREZID_id
+
+signif_res_dn <- res_Group[res_Group$padj < 0.05 & (res_Group$log2FoldChange)< 0 & !is.na(res_Group$padj), ]
+signif_genes_dn <- signif_res_dn$ENTREZID_id
+
+```
+
+Now we can run an enrichment analysis of GO
+```{r}
+library("msigdbr")
+
+
+
+C5_gene_sets = msigdbr(species = "mouse", category = "C5", subcategory = "GO:BP")
+
+
+msigdbr_t2g = C5_gene_sets %>% dplyr::distinct(gs_name, entrez_gene) %>% as.data.frame()
+
+
+ego.up <- enricher(signif_genes_up, 
+                   pvalueCutoff = 0.05, 
+                   pAdjustMethod = "BH", 
+                   universe = all_genes, 
+                   minGSSize = 10, 
+                   maxGSSize = 500, 
+                   qvalueCutoff = 0.2, 
+                   TERM2GENE=msigdbr_t2g)
+
+
+ego.dn <- enricher(signif_genes_dn, 
+                   pvalueCutoff = 0.05, 
+                   pAdjustMethod = "BH", 
+                   universe = all_genes, 
+                   minGSSize = 10, 
+                   maxGSSize = 500, 
+                   qvalueCutoff = 0.2, 
+                   TERM2GENE=msigdbr_t2g)
+
+
+```
+
+```{r}
+
+library(enrichplot)
+p1 <- barplot(ego.up, showCategory=20)
+p1
+
+```
+
+Visualizing clusterProfiler results:
+
+dotplot
+
+
+
 
 
 glm\rforest
