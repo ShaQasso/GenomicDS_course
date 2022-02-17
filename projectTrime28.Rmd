@@ -1,0 +1,264 @@
+---
+title: "final project Trim28"
+author: "Shaqed Carasso"
+date: "2/15/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Project overview
+
+placeholder
+
+```{r message=FALSE, warning=FALSE, include=TRUE, paged.print=FALSE}
+
+library(dplyr)
+library(ggplot2)
+library(MetBrewer)
+library(DESeq2)
+library(pheatmap)
+library(tidyverse)
+library(ggpubr)
+library(limma)
+library(reshape2)
+library(RColorBrewer)
+library(corrplot)
+library("org.Mm.eg.db")
+```
+
+## Open files, create counts and metadata tables, visualize library sizes
+
+open files
+
+```{r}
+
+counts_file <- "trim28_project/E-MTAB-9809-raw-counts.tsv"
+coldata_file <- "trim28_project/E-MTAB-9809-experiment-design.tsv"
+
+counts <- read.table(counts_file, sep = '\t',header = T, row.names = 1, stringsAsFactors = TRUE)
+metadata <-  read.table(coldata_file, row.names = 1, header = T, sep = '\t', 
+                        stringsAsFactors = TRUE)
+```
+
+keep a 'dictionary of gene ids and names, then remove gene names from counts file
+
+```{r}
+geneNames <- as.data.frame(counts[,"Gene.Name"])
+geneNames$Gene.ID <- rownames(counts)
+geneNames <- geneNames %>% rename('counts[, "Gene.Name"]'= "Gene.Name")
+counts <- subset( counts, select = -Gene.Name)
+```
+
+get only informative columns of metadata, sex and group
+
+```{r}
+metadata <- metadata %>% select('Sample.Characteristic.genotype.', 'Sample.Characteristic.sex.') %>%
+        rename('Sample.Characteristic.sex.' = "Sex") %>%
+        mutate(Group = ifelse(grepl("Trim28", Sample.Characteristic.genotype.), "Trim28KO", "WT"))
+
+
+```
+
+Library sizes:
+
+```{r}
+metadata$lib_size = colSums(counts)
+
+ggplot(metadata, aes(fill = Group)) +
+        geom_col(aes(x = rownames(metadata), y = lib_size)) +
+        labs(title = "Barplot of library sizes") +
+        #scale_x_discrete(limits = rownames(metadata)) +
+        theme_pubr() +
+        xlab(NULL) +
+        ylab("Library size") +
+        scale_fill_manual(values=met.brewer("Isfahan1", 2)) +
+        facet_wrap(~Sex, scales = "free") +
+        theme(axis.text.x = element_text(angle=90, vjust=0.4))
+
+```
+
+
+Normalize to CPM, exclude lowly expressed genes:
+
+```{r}
+cpm <- apply(counts, 2, 
+             function(x) as.numeric(x)/sum(as.numeric(x)) * 10^6)
+
+colSums(cpm)
+
+keep <- rowMeans(cpm) > 0.3
+table(keep)
+
+counts.filtered = counts[keep,]
+dim(counts.filtered)
+
+```
+
+Quality control, looking at correlations between the samples and PCA:
+
+```{r}
+# Compute the correlation values between samples
+correlationMatrix <- cor(cpm) 
+
+breaksList <- seq(0.5, 1, by = 0.001)
+heatmap.corr <- pheatmap(correlationMatrix, annotation = select(metadata, c(Group, Sex)), 
+                         #annotation_colors = list(Group = c('none' = "lightblue3", immunized = "red3", 
+                          #                                  "immunized_cross" = "salmon")),
+                         breaks = breaksList,
+                         # cluster_rows = FALSE,
+                         #cluster_cols = FALSE,
+                         
+                         color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList)),
+                         main = "Correlations Heatmap")
+
+```
+
+ERR4873315 is very different from the rest, so I think it's better to filter it.
+
+Create DeseQ object, comapring Groups with Sex as a confounding factor:
+
+
+```{r}
+metadata_filtered_samples <- subset(metadata, row.names(metadata) != ("ERR4873315"))
+subset_Samples <- as.vector(rownames(metadata_filtered_samples))
+subset_reads <- counts.filtered[, subset_Samples]
+
+countdata.deseq <- DESeq2::DESeqDataSetFromMatrix(countData = subset_reads, 
+                                                  colData = metadata_filtered_samples, 
+                                                  design = ~ Group + Sex)
+
+
+dds <- DESeq(countdata.deseq)
+# Extract the normalized counts
+countdata_normalized_counts <- counts(dds, normalized = TRUE)
+```
+Dispersion (why?)
+
+```{r}
+plotDispEsts(dds)
+```
+
+Plotting a PCA plot shows that the samples are divided by sex across PC1, and by their condition on PC2
+```{r}
+# Plot PCA 
+
+# Extracting transformed values, selecting top 1000 most variable genes
+
+vsd <- vst(dds, blind=FALSE, nsub = 1000)
+
+
+pcaData <- plotPCA(vsd, intgroup = c("Group", "Sex"), returnData = TRUE)
+
+percentVar <- round(100 * attr(pcaData, "percentVar"),digits = 1)
+
+ggplot(pcaData, aes(x = PC1, y = PC2, color = Group)) +
+        coord_fixed()+
+        geom_point(size = 2, aes(shape = Sex)) +
+        xlab(paste0("PC1: ", percentVar[1], "%")) + 
+        ylab(paste0("PC2: ", percentVar[2], "%")) +
+        #geom_text(label = rownames(pcaData), size = 4, nudge_y = 0.2, show.legend = FALSE)+
+        stat_ellipse(geom = "polygon", type="norm", alpha=0.1, aes(fill=Group)) +
+        labs(color = "Group") +
+        guides(color = guide_legend(order = 1),
+               shape = guide_legend(order = 2))+
+        scale_fill_manual(values=met.brewer("Isfahan1", 2), guide = NULL) +
+        scale_color_manual(values=met.brewer("Isfahan1", 2)) +
+        theme_pubr(legend = "right")
+        
+```
+deseq results
+
+```{r}
+
+res <- results(dds, 
+               contrast = c("Group", "Trim28KO", 'WT'), 
+               alpha = 0.05, 
+               lfcThreshold = 0)
+
+
+
+summary(res)
+
+
+hist(res$pvalue[res$baseMean > 1], breaks = 0:20/20,
+     col = "grey50", border = "white")
+
+
+
+resultsNames(dds)
+```
+
+```{r}
+resLFC <- lfcShrink(dds, coef="Group_WT_vs_Trim28KO", type="apeglm")
+
+
+resLFC$entrez <- mapIds(org.Mm.eg.db,
+                     keys=rownames(resLFC),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+
+
+
+dds_res_all <- data.frame(res)
+
+dds_res_all_named <- left_join(rownames_to_column(dds_res_all), geneNames, by=c("rowname" = "Gene.ID"))
+
+
+ggplot() +
+        geom_point(data = dds_res_all, mapping = aes(x = log2FoldChange, y = -log10(pvalue)), 
+                   col = "grey80", pch = 21, size = 4) + 
+        geom_point(data = subset(dds_res_all, log2FoldChange < -0.58 & padj < 0.05),
+                   aes(log2FoldChange, -log10(pvalue)), color = "red", size = 4)  +
+        geom_point(data = subset(dds_res_all, log2FoldChange > 0.58 & padj < 0.05),
+                   aes(log2FoldChange, -log10(pvalue)), color = "green3", size = 4) +
+        #ggtitle("in-vitro -CD3 (red) vs none (green) \nsignificant genes are colored") +
+        geom_text(data = subset(dds_res_all, abs(log2FoldChange) > 1 & padj < 0.05),
+                  aes(log2FoldChange, -log10(pvalue), label = entrez), 
+                  vjust =1, size = 4)+
+        scale_color_manual(values=met.brewer("Isfahan1", 2)) +
+
+        theme_pubr()
+
+dds_res_all <- data.frame(res) %>% mutate(threshold = (padj < 0.05 & abs(log2FoldChange) >= 0.58)) %>%
+        filter(!is.na(padj))
+
+
+dds_res_all <- left_join(rownames_to_column(dds_res_all), geneNames, by=c("rowname" = "Gene.ID"))
+
+
+ggplot(dds_res_all) + 
+        geom_point(aes(x = log2FoldChange, y = -log10(pvalue), color = threshold)) + 
+        xlab("log2 fold change") + 
+        ylab("-log10 adjusted p-value") + 
+        theme(legend.position = "none", 
+              plot.title = element_text(size = rel(1.5), hjust = 0.5), 
+              axis.title = element_text(size = rel(1.25)))+
+        scale_color_manual(values=met.brewer("Isfahan1", 2)) +
+        #geom_text(data = subset(dds_res_all, abs(log2FoldChange) > 1 & padj < 0.05),
+        #          aes(log2FoldChange, -log10(pvalue), label = entrez), 
+         #         vjust =1, size = 4)+
+        
+        
+        geom_text(data = subset(dds_res_all, Gene.Name %in% c("Elovl3", "Olr1", " Elovl7", " Klf14")),
+                  aes(log2FoldChange, -log10(pvalue), label = Gene.Name), 
+                  vjust =1, size = 4)
+        theme_pubr(legend = "none")
+
+
+```
+
+
+enrichment
+
+
+glm\rforest
+
+
+
+
+
