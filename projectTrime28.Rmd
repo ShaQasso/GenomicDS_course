@@ -15,7 +15,7 @@ placeholder
 
 ```{r message=FALSE, warning=FALSE, include=TRUE, paged.print=FALSE}
 
-library(dplyr)
+
 library(ggplot2)
 library(MetBrewer)
 library(DESeq2)
@@ -26,9 +26,8 @@ library(limma)
 library(reshape2)
 library(RColorBrewer)
 library(corrplot)
-library(EnhancedVolcano)
 library(patchwork)
-library(clusterProfiler)
+library(dplyr)
 
 ```
 
@@ -36,7 +35,7 @@ library(clusterProfiler)
 
 open files
 
-```{r}
+```{r open files}
 
 counts_file <- "trim28_project/E-MTAB-9809-raw-counts.tsv"
 coldata_file <- "trim28_project/E-MTAB-9809-experiment-design.tsv"
@@ -48,18 +47,18 @@ metadata <-  read.table(coldata_file, row.names = 1, header = T, sep = '\t',
 
 keep a 'dictionary of gene ids and names, then remove gene names from counts file
 
-```{r}
+```{r gene names}
 geneNames <- as.data.frame(counts[, "Gene.Name"])
 geneNames$Gene.ID <- rownames(counts)
-geneNames <- geneNames %>% rename('counts[, "Gene.Name"]'= "Gene.Name")
+geneNames <- geneNames %>% rename("Gene.Name"='counts[, "Gene.Name"]'  )
 counts <- subset( counts, select = -Gene.Name)
 ```
 
 get only informative columns of metadata, sex and group
 
-```{r}
+```{r prepare metadata}
 metadata <- metadata %>% select('Sample.Characteristic.genotype.', 'Sample.Characteristic.sex.') %>%
-        rename('Sample.Characteristic.sex.' = "Sex") %>%
+        rename( "Sex"= 'Sample.Characteristic.sex.') %>%
         mutate(Group = ifelse(grepl("Trim28", Sample.Characteristic.genotype.), "Trim28KO", "WT"))
 
 
@@ -67,7 +66,7 @@ metadata <- metadata %>% select('Sample.Characteristic.genotype.', 'Sample.Chara
 
 Library sizes:
 
-```{r}
+```{r lib sizes}
 metadata$lib_size = colSums(counts)
 
 ggplot(metadata, aes(fill = Group)) +
@@ -84,15 +83,16 @@ ggplot(metadata, aes(fill = Group)) +
 ```
 
 
-Normalize to CPM, exclude lowly expressed genes (less than 0.5 CPM in all samples:
+Normalize to CPM, exclude lowly expressed genes (less than 3 CPM in at least 3 samples
 
-```{r}
+```{r normalize to cpm}
 cpm <- apply(counts, 2, 
              function(x) as.numeric(x)/sum(as.numeric(x)) * 10^6)
 
 colSums(cpm)
 
-keep <- rowMeans(cpm) >= 30
+thresh <- cpm >= 3
+keep <- rowSums(thresh) >= 3
 
 table(keep)
 
@@ -103,14 +103,15 @@ dim(counts.filtered)
 
 Quality control, looking at correlations between the samples and PCA:
 
-```{r}
+```{r correlation}
 # Compute the correlation values between samples
 correlationMatrix <- cor(cpm) 
 
 breaksList <- seq(0.5, 1, by = 0.001)
+
 heatmap.corr <- pheatmap(correlationMatrix, annotation = select(metadata, c(Group, Sex)), 
-                         #annotation_colors = list(Group = c('none' = "lightblue3", immunized = "red3", 
-                          #                                  "immunized_cross" = "salmon")),
+                         annotation_colors = list(Group = c('WT' = "#178f92", Trim28KO = "#845d29"), 
+                                                  Sex = c('male' = "lightgreen", 'female' = "salmon" )),
                          breaks = breaksList,
                          # cluster_rows = FALSE,
                          #cluster_cols = FALSE,
@@ -125,7 +126,7 @@ ERR4873315 is very different from the rest, so I think it's better to filter it.
 Create DeseQ object, comapring Groups with Sex as a confounding factor:
 
 
-```{r}
+```{r initiate deseq2}
 metadata_filtered_samples <- subset(metadata, row.names(metadata) != ("ERR4873315"))
 #metadata_filtered_samples <- subset(metadata_filtered_samples, Sex != "male")
 
@@ -144,12 +145,12 @@ countdata_normalized_counts <- counts(dds, normalized = TRUE)
 ```
 Dispersion (why?)
 
-```{r}
+```{r dispersion}
 plotDispEsts(dds)
 ```
 
 Plotting a PCA plot shows that the samples are divided by sex across PC1, and by their condition on PC2
-```{r}
+```{r PCA}
 # Plot PCA 
 
 # Extracting transformed values, selecting top 1000 most variable genes
@@ -178,7 +179,7 @@ ggplot(pcaData, aes(x = PC1, y = PC2, color = Group)) +
 ```
 deseq results
 
-```{r}
+```{r summarizing results}
 
 res_Group <- results(dds, 
                contrast = c("Group", "Trim28KO", 'WT'), 
@@ -187,33 +188,22 @@ res_Group <- results(dds,
 
 summary(res_Group)
 
-res_Sex <- results(dds, 
-               contrast = c("Sex", "male", 'female'), 
-               alpha = 0.05, 
-               lfcThreshold = 0)
-
-
-summary(res_Sex)
-
-
 hist(res_Group$pvalue[res_Group$baseMean > 1], breaks = 0:20/20,
      col = "grey50", border = "white")
 
 
-
-resultsNames(dds)
 ```
 
-```{r}
-resLFC <- lfcShrink(dds, coef="Group_WT_vs_Trim28KO", type="apeglm")
+```{r volacno}
 
-
-dds_res_all <- data.frame(res) %>% mutate(threshold = (padj < 0.05 & abs(log2FoldChange) >= 0)) %>%
+dds_res_all <- data.frame(res_Group) %>% mutate(threshold = ifelse((padj < 0.01 & log2FoldChange < 0), "Downregulated", 
+                                                ifelse((padj < 0.01 & log2FoldChange > 0), "Upregulated", "NS"))) %>%
         filter(!is.na(padj))
 
 
 dds_res_all <- left_join(rownames_to_column(dds_res_all), geneNames, by=c("rowname" = "Gene.ID"))
 
+library(ggbreak)
 
 ggplot(dds_res_all) + 
         geom_point(aes(x = log2FoldChange, y = -log10(padj), color = threshold)) + 
@@ -222,38 +212,92 @@ ggplot(dds_res_all) +
         theme(legend.position = "none", 
               plot.title = element_text(size = rel(1.5), hjust = 0.5), 
               axis.title = element_text(size = rel(1.25)))+
-        scale_color_manual(values=met.brewer("Isfahan1", 2)) +
-        geom_text(data = subset(dds_res_all, abs(log2FoldChange) > 3 & padj < 0.05),
+        scale_color_manual(values=c("#178f92","gray", "#845d29")) +
+        geom_text(data = subset(dds_res_all, abs(log2FoldChange) > 4 & padj < 0.01),
                   aes(log2FoldChange, -log10(padj), label = Gene.Name), 
                   vjust =1, size = 4)+
         
         geom_text(data = subset(dds_res_all, Gene.Name %in% c("Elovl3", "Olr1", "Elovl7", "Klf14")),
                   aes(log2FoldChange, -log10(padj), label = Gene.Name), 
                   vjust =1, size = 4)+
-        scale_x_continuous(limits = c(-10,10))+
+        scale_x_continuous(limits = c(-7,8))+
+        scale_y_continuous(limits = c(-1,130))+
+        scale_y_break(c(50,110))+
         geom_hline(yintercept = -log10(0.05), linetype = 2)+
-        theme_pubr(legend = "none")
-
+        theme_pubr(legend = "right")
 
 
 
 
 ```
+```{r boxplots specific genes}
+
+gene_list_volcano <- c("Elovl3", "Elovl7", "Tcfl5", "Klf14", "Gm1821", "Fbx040", "Olr1")
+data_boxplots_volcano <- melt(countdata_normalized_counts[geneNames$Gene.ID[geneNames$Gene.Name %in% gene_list_volcano],], value.name = "Counts") %>%
+        rename(Gene.ID = Var1 ,Sample = Var2)
+
+
+data_boxplots_volcano <- left_join(data_boxplots_volcano, rownames_to_column(metadata), by=c("Sample" = "rowname")) %>%
+        left_join(geneNames[, c("Gene.ID", "Gene.Name")], by = "Gene.ID") %>%
+        mutate(Group_sex = factor(paste(Group, Sex, sep = ", ")))
+
+
+symnum.args <- list(
+        cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1), 
+        symbols = c("**", "**", "**", "*", "NS"))
+
+ggplot(data = data_boxplots_volcano, aes(x=Group_sex, y=Counts, fill = Group, color = Group)) +
+               geom_point(position=position_jitter(0.05)) + 
+        geom_boxplot(position=position_dodge(1), show.legend = FALSE, alpha = 0.4,
+                     outlier.shape = NA, aes(fill = Group))+
+        facet_wrap(~Gene.Name, scales = "free") + 
+        scale_fill_manual(values=met.brewer("Isfahan1", 2)) +
+        scale_color_manual(values=met.brewer("Isfahan1", 2)) +
+        theme_pubr(base_size = 8, legend = "top")+
+        labs(y = "DESeq normalized counts",
+             x = NULL) +
+        scale_x_discrete(breaks = c("Trim28KO, male", "Trim28KO, female", "WT, male", "WT, female"),
+                          labels= c("Male", "Female", "Male", "Female"))+
+        labs(fill = "Group") +
+        guides(fill = guide_legend(override.aes = list(size = 5)))
+
+```
+heatmap
+```{r heatmap}
+# Subset normalized counts to significant genes
+
+dds_res_sig <- subset(dds_res_all, padj < 0.01 & abs(log2FoldChange) >= 0)
+
+sig_norm_counts_dds <- countdata_normalized_counts[dds_res_sig$rowname, ]
+
+# Choose heatmap color palette
+heat_colors <- brewer.pal(n = 6, name = "YlOrRd")
+
+# Plot heatmap
+heatmap.numClusters <- pheatmap(sig_norm_counts_dds, 
+                                #color = heat_colors, 
+                                cluster_rows = T, 
+                                show_rownames = F,
+                                show_colnames = F,
+                                #labels_row = T,
+                                annotation = select(metadata, c(Group, Sex)), 
+                                #annotation_colors = list(Condition = c('none' = "lightblue3", immunized = "red3")),
+                                scale = "row")
+
+
+```
+
 
 
 enrichment
 
-```{r}
+```{r label genes with entrezid}
 
-alpha = 0.05
+alpha = 0.01
 sigtab = dds_res_all %>% filter(padj < alpha)
 #order results by pvalues
 sigtab = sigtab[order(sigtab$pvalue),]
 head(sigtab)
-
-edgGene <- data.frame(sigtab[which((sigtab$log2FoldChange >= 0) & (sigtab$pvalue <= alpha)),1,drop=FALSE])
-geneList <- edgGene$rowname
-
 
 library("AnnotationDbi")
 library(org.Mm.eg.db)
@@ -263,7 +307,6 @@ sigtab$ENTREZID_id = mapIds(org.Mm.eg.db,
                             keytype="ENSEMBL",
                             multiVals="first")
 
-detach("AnnotationDbi")
 
 gene_list<-na.omit(sigtab)
 
@@ -271,12 +314,13 @@ original_gene_list <- gene_list$log2FoldChange
 
 names(original_gene_list) <-  gene_list$ENTREZID_id    
 
-
-
 geneList = sort(original_gene_list, decreasing = TRUE)
 ```
 
-```{r}
+
+
+
+```{r enrichment prepare gene lists}
 # Create background dataset for hypergeometric testing using all genes tested for significance in the results
 res_Group = res_Group[!is.na(res_Group$padj),]
 
@@ -288,67 +332,169 @@ res_Group$ENTREZID_id = mapIds(org.Mm.eg.db,
 
 all_genes <- rownames(res_Group$ENTREZID_id)
 # Extract significant results
-signif_res_up <- res_Group[res_Group$padj < 0.05 & (res_Group$log2FoldChange)>0 & !is.na(res_Group$padj), ]
+signif_res_up <- res_Group[res_Group$padj < 0.01 & (res_Group$log2FoldChange) > 0.5 & !is.na(res_Group$padj), ]
 signif_genes_up <- signif_res_up$ENTREZID_id
 
-signif_res_dn <- res_Group[res_Group$padj < 0.05 & (res_Group$log2FoldChange)< 0 & !is.na(res_Group$padj), ]
+signif_res_dn <- res_Group[res_Group$padj < 0.01 & (res_Group$log2FoldChange) < 0.5 & !is.na(res_Group$padj), ]
 signif_genes_dn <- signif_res_dn$ENTREZID_id
 
 ```
 
 Now we can run an enrichment analysis of GO
-```{r}
-library("msigdbr")
+
+```{r visualize enrichment}
+
+library(gprofiler2)
 
 
+p <- gost(query = list( "Upregulated" = rownames(signif_res_up), "Downregulated" = rownames(signif_res_dn)), 
+          organism = "mmusculus",
+          multi_query = TRUE,
+          significant = TRUE,
+          sources = c("KEGG", "GO:BP", "GO:CC", "WP", "REAC")
+          )
 
-C5_gene_sets = msigdbr(species = "mouse", category = "C5", subcategory = "GO:BP")
+gostplot(p, capped = TRUE, interactive = TRUE)
+
+```
+
+ML random forest, split 50:50
+take only 1000 most variable genes
+```{r split data}
+library(MLSeq)
+
+class <- DataFrame(Group = factor(metadata_filtered_samples$Group))
+
+set.seed(23)
+
+vars <- sort(apply(subset_reads, 1, var, na.rm = TRUE), decreasing = TRUE)
+data <- subset_reads[names(vars)[1:1000], ]
+nTest <- ceiling(ncol(data) * 0.5)
+ind <- sample(ncol(data), nTest, FALSE)
+
+ind <- c(
+        sample(rownames(
+                metadata_filtered_samples[metadata_filtered_samples$Sex == "male" & metadata_filtered_samples$Group == "Trim28KO", ]),3,FALSE),
+        sample(rownames(
+                metadata_filtered_samples[metadata_filtered_samples$Sex == "female" & metadata_filtered_samples$Group == "Trim28KO", ]),3,FALSE),
+        sample(rownames(
+                metadata_filtered_samples[metadata_filtered_samples$Sex == "male" & metadata_filtered_samples$Group == "WT", ]),3,FALSE),
+        sample(rownames(
+                metadata_filtered_samples[metadata_filtered_samples$Sex == "female" & metadata_filtered_samples$Group == "WT", ]),3,FALSE)
+         )
+
+# Minimum count is set to 1 in order to prevent 0 division problem within
+# classification models.
+data.train <- as.matrix(data[ ,colnames(data) %in% ind] + 1)
+data.test <- as.matrix(data[ ,!colnames(data) %in% ind] + 1)
+classtr <- DataFrame(condition = class[rownames(class) %in% ind, ])
+classts <- DataFrame(condition = class[!rownames(class) %in% ind, ])
 
 
-msigdbr_t2g = C5_gene_sets %>% dplyr::distinct(gs_name, entrez_gene) %>% as.data.frame()
-
-
-ego.up <- enricher(signif_genes_up, 
-                   pvalueCutoff = 0.05, 
-                   pAdjustMethod = "BH", 
-                   universe = all_genes, 
-                   minGSSize = 10, 
-                   maxGSSize = 500, 
-                   qvalueCutoff = 0.2, 
-                   TERM2GENE=msigdbr_t2g)
-
-
-ego.dn <- enricher(signif_genes_dn, 
-                   pvalueCutoff = 0.05, 
-                   pAdjustMethod = "BH", 
-                   universe = all_genes, 
-                   minGSSize = 10, 
-                   maxGSSize = 500, 
-                   qvalueCutoff = 0.2, 
-                   TERM2GENE=msigdbr_t2g)
+data.trainS4 = DESeqDataSetFromMatrix(countData = data.train, colData = classtr,
+                                      design = formula(~condition))
+data.testS4 = DESeqDataSetFromMatrix(countData = data.test, colData = classts,
+                                     design = formula(~condition))
 
 
 ```
 
-```{r}
+create control and tune grid for the mtry hyperparameter,
+train the model
 
-library(enrichplot)
-p1 <- barplot(ego.up, showCategory=20)
-p1
+```{r control and train model}
+
+
+control <- trainControl(method='repeatedcv', 
+                        number=10, 
+                        repeats=3, 
+                        search='grid')
+
+rf_gridsearch <- train(x = t(data.train),
+                       y = classtr$condition,
+                       method = "rf",
+                       metric = "Accuracy",
+                       tuneLength = 10,
+                       #importance= 'impurity',
+                       trControl = control)
 
 ```
 
-Visualizing clusterProfiler results:
 
-dotplot
+```{r confusion matrix }
+show(rf_gridsearch)
+
+pred.rf <- predict(rf_gridsearch, t(data.test))
+pred.rf
+
+pred.rf <- relevel(pred.rf, ref = "WT")
+actual <- relevel(classts$condition, ref = "WT")
+tbl <- table(Predicted = pred.rf, Actual = actual)
+confusionMatrix(tbl, positive = "WT")
+
+plot(rf_gridsearch)
+```
 
 
 
+```{r extract important genes}
+
+importance.rf <- varImp(rf_gridsearch,scale = TRUE)
+importance.rf2 <- left_join(rownames_to_column(importance.rf$importance), geneNames, by=c("rowname" = "Gene.ID"))
+
+importance <- varImp(rf_gridsearch)
+importance <- varImp(rf_gridsearch)$importance
+importance <- left_join(rownames_to_column(importance), geneNames, by=c("rowname" = "Gene.ID"))
+
+library(forcats)
+
+importance %>% arrange(Overall) %>%
+        mutate(Gene = fct_reorder(Gene.Name, Overall)) %>%
+        filter(Overall > 50) %>%
+        ggplot(aes(x = Gene, y = Overall)) +
+        geom_segment(aes(xend=Gene), yend=0) +
+        labs(title = 'RF (rf). Gene importance') +
+        geom_point(size = 3,shape = 21, colour = "blue", fill = "white") +
+        expand_limits(y=0) +
+        coord_flip() +
+        theme_pubr()
+
+```
 
 
-glm\rforest
+```{r plot important genes boxplot}
+
+list_imp_genes <- importance %>% arrange(Overall) %>%
+        mutate(Gene = fct_reorder(Gene.Name, Overall)) %>%
+        filter(Overall > 50) 
+
+data_boxplots <- melt(countdata_normalized_counts[geneNames$Gene.ID[geneNames$Gene.Name %in% list_imp_genes$Gene.Name],], value.name = "Counts") %>%
+        rename(Gene.ID = Var1 ,Sample = Var2)
 
 
+data_boxplots <- left_join(data_boxplots, rownames_to_column(metadata), by=c("Sample" = "rowname")) %>%
+        left_join(geneNames[, c("Gene.ID", "Gene.Name")], by = "Gene.ID") %>%
+        mutate(Group_sex = factor(paste(Group, Sex, sep = ", ")))
 
 
+symnum.args <- list(
+        cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1), 
+        symbols = c("**", "**", "**", "*", "NS"))
 
+ggplot(data = data_boxplots, aes(x=Group_sex, y=Counts, fill = Group, color = Group)) +
+               geom_point(position=position_jitter(0.05)) + 
+        geom_boxplot(position=position_dodge(1), show.legend = FALSE, alpha = 0.4,
+                     outlier.shape = NA, aes(fill = Group))+
+        facet_wrap(~Gene.Name, scales = "free") + 
+        scale_fill_manual(values=met.brewer("Isfahan1", 2)) +
+        scale_color_manual(values=met.brewer("Isfahan1", 2)) +
+        theme_pubr(base_size = 8, legend = "top")+
+        labs(y = "DESeq normalized counts",
+             x = NULL) +
+        scale_x_discrete(breaks = c("Trim28KO, male", "Trim28KO, female", "WT, male", "WT, female"),
+                          labels= c("Male", "Female", "Male", "Female"))+
+        labs(fill = "Group") +
+        guides(fill = guide_legend(override.aes = list(size = 5)))
+
+
+```

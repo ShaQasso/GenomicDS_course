@@ -26,13 +26,13 @@ metadata <-  read.table(coldata_file, row.names = 1, header = T, sep = '\t',
 
 geneNames <- as.data.frame(counts[,"Gene.Name"])
 geneNames$Gene.ID <- rownames(counts)
-geneNames <- geneNames %>% rename('counts[, "Gene.Name"]'= "Gene.Name")
+geneNames <- geneNames %>% rename("Gene.Name" = 'counts[, "Gene.Name"]')
 counts <- subset( counts, select = -Gene.Name)
 
 # get only informative columns of metadata, sex and group
 
 metadata <- metadata %>% select('Sample.Characteristic.genotype.', 'Sample.Characteristic.sex.') %>%
-        rename('Sample.Characteristic.sex.' = "Sex") %>%
+        rename("Sex" = 'Sample.Characteristic.sex.' ) %>%
         mutate(Group = ifelse(grepl("Trim28", Sample.Characteristic.genotype.), "Trim28KO", "WT"))
 
 
@@ -59,7 +59,7 @@ cpm <- apply(counts, 2,
 colSums(cpm)
 
 
-keep <- rowMeans(cpm) > 0.3
+keep <- rowMeans(cpm) > 30
 table(keep)
 
 
