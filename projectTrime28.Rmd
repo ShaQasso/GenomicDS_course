@@ -196,8 +196,9 @@ hist(res_Group$pvalue[res_Group$baseMean > 1], breaks = 0:20/20,
 
 ```{r volacno}
 
-dds_res_all <- data.frame(res_Group) %>% mutate(threshold = ifelse((padj < 0.01 & log2FoldChange < 0), "Downregulated", 
-                                                ifelse((padj < 0.01 & log2FoldChange > 0), "Upregulated", "NS"))) %>%
+dds_res_all <- data.frame(res_Group) %>% 
+        mutate(threshold = ifelse((padj < 0.01 & log2FoldChange < 0), "Downregulated", 
+                                  ifelse((padj < 0.01 & log2FoldChange > 0), "Upregulated", "NS"))) %>%
         filter(!is.na(padj))
 
 
@@ -225,8 +226,6 @@ ggplot(dds_res_all) +
         scale_y_break(c(50,110))+
         geom_hline(yintercept = -log10(0.05), linetype = 2)+
         theme_pubr(legend = "right")
-
-
 
 
 ```
@@ -335,7 +334,7 @@ all_genes <- rownames(res_Group$ENTREZID_id)
 signif_res_up <- res_Group[res_Group$padj < 0.01 & (res_Group$log2FoldChange) > 0.5 & !is.na(res_Group$padj), ]
 signif_genes_up <- signif_res_up$ENTREZID_id
 
-signif_res_dn <- res_Group[res_Group$padj < 0.01 & (res_Group$log2FoldChange) < 0.5 & !is.na(res_Group$padj), ]
+signif_res_dn <- res_Group[res_Group$padj < 0.01 & (res_Group$log2FoldChange) < -0.5 & !is.na(res_Group$padj), ]
 signif_genes_dn <- signif_res_dn$ENTREZID_id
 
 ```
@@ -351,7 +350,7 @@ p <- gost(query = list( "Upregulated" = rownames(signif_res_up), "Downregulated"
           organism = "mmusculus",
           multi_query = TRUE,
           significant = TRUE,
-          sources = c("KEGG", "GO:BP", "GO:CC", "WP", "REAC")
+          sources = c("KEGG", "GO:BP", "GO:CC", "REAC")
           )
 
 gostplot(p, capped = TRUE, interactive = TRUE)
@@ -364,23 +363,22 @@ take only 1000 most variable genes
 library(MLSeq)
 
 class <- DataFrame(Group = factor(metadata_filtered_samples$Group))
+rownames(class) <- rownames(metadata_filtered_samples)
 
-set.seed(23)
+set.seed(42)
 
 vars <- sort(apply(subset_reads, 1, var, na.rm = TRUE), decreasing = TRUE)
 data <- subset_reads[names(vars)[1:1000], ]
-nTest <- ceiling(ncol(data) * 0.5)
-ind <- sample(ncol(data), nTest, FALSE)
 
 ind <- c(
         sample(rownames(
-                metadata_filtered_samples[metadata_filtered_samples$Sex == "male" & metadata_filtered_samples$Group == "Trim28KO", ]),3,FALSE),
+                metadata_filtered_samples[metadata_filtered_samples$Sex == "male" & metadata_filtered_samples$Group == "Trim28KO", ]),4,FALSE),
         sample(rownames(
-                metadata_filtered_samples[metadata_filtered_samples$Sex == "female" & metadata_filtered_samples$Group == "Trim28KO", ]),3,FALSE),
+                metadata_filtered_samples[metadata_filtered_samples$Sex == "female" & metadata_filtered_samples$Group == "Trim28KO", ]),4,FALSE),
         sample(rownames(
-                metadata_filtered_samples[metadata_filtered_samples$Sex == "male" & metadata_filtered_samples$Group == "WT", ]),3,FALSE),
+                metadata_filtered_samples[metadata_filtered_samples$Sex == "male" & metadata_filtered_samples$Group == "WT", ]),4,FALSE),
         sample(rownames(
-                metadata_filtered_samples[metadata_filtered_samples$Sex == "female" & metadata_filtered_samples$Group == "WT", ]),3,FALSE)
+                metadata_filtered_samples[metadata_filtered_samples$Sex == "female" & metadata_filtered_samples$Group == "WT", ]),4,FALSE)
          )
 
 # Minimum count is set to 1 in order to prevent 0 division problem within
@@ -404,10 +402,9 @@ train the model
 
 ```{r control and train model}
 
-
 control <- trainControl(method='repeatedcv', 
                         number=10, 
-                        repeats=3, 
+                        repeats=5, 
                         search='grid')
 
 rf_gridsearch <- train(x = t(data.train),
@@ -415,7 +412,6 @@ rf_gridsearch <- train(x = t(data.train),
                        method = "rf",
                        metric = "Accuracy",
                        tuneLength = 10,
-                       #importance= 'impurity',
                        trControl = control)
 
 ```
@@ -425,7 +421,6 @@ rf_gridsearch <- train(x = t(data.train),
 show(rf_gridsearch)
 
 pred.rf <- predict(rf_gridsearch, t(data.test))
-pred.rf
 
 pred.rf <- relevel(pred.rf, ref = "WT")
 actual <- relevel(classts$condition, ref = "WT")
@@ -450,7 +445,7 @@ library(forcats)
 
 importance %>% arrange(Overall) %>%
         mutate(Gene = fct_reorder(Gene.Name, Overall)) %>%
-        filter(Overall > 50) %>%
+        filter(Overall > 75) %>%
         ggplot(aes(x = Gene, y = Overall)) +
         geom_segment(aes(xend=Gene), yend=0) +
         labs(title = 'RF (rf). Gene importance') +
@@ -466,7 +461,7 @@ importance %>% arrange(Overall) %>%
 
 list_imp_genes <- importance %>% arrange(Overall) %>%
         mutate(Gene = fct_reorder(Gene.Name, Overall)) %>%
-        filter(Overall > 50) 
+        filter(Overall > 75) 
 
 data_boxplots <- melt(countdata_normalized_counts[geneNames$Gene.ID[geneNames$Gene.Name %in% list_imp_genes$Gene.Name],], value.name = "Counts") %>%
         rename(Gene.ID = Var1 ,Sample = Var2)
@@ -476,10 +471,6 @@ data_boxplots <- left_join(data_boxplots, rownames_to_column(metadata), by=c("Sa
         left_join(geneNames[, c("Gene.ID", "Gene.Name")], by = "Gene.ID") %>%
         mutate(Group_sex = factor(paste(Group, Sex, sep = ", ")))
 
-
-symnum.args <- list(
-        cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1), 
-        symbols = c("**", "**", "**", "*", "NS"))
 
 ggplot(data = data_boxplots, aes(x=Group_sex, y=Counts, fill = Group, color = Group)) +
                geom_point(position=position_jitter(0.05)) + 
