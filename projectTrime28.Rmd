@@ -570,6 +570,7 @@ Looking at the model, we can see that it was able to predict the classes of the 
 
 For example, having a majority of males in the train set will overfitting the model to males - leading to worse performance on the test set - having a majority of female samples.
 
+Using 'Caret's tuning - the random forest's best mtry hyperparameter was 23, yielding the best results.
 
 ```{r confusion matrix, message=FALSE, warning=FALSE}
 show(rf_model)
