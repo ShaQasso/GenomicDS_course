@@ -74,7 +74,7 @@ metadata <-  read.table(coldata_file, row.names = 1, header = T, sep = '\t',
                         stringsAsFactors = TRUE)
 ```
 
-Creating a 'dictionary of gene ids and names, then remove gene names from counts file
+Creating a 'dictionary' of gene ids and names, then remove gene names from counts file
 
 ```{r gene names}
 geneNames <- as.data.frame(counts[, "Gene.Name"])
@@ -83,7 +83,7 @@ geneNames <- geneNames %>% rename("Gene.Name"='counts[, "Gene.Name"]')
 counts <- subset( counts, select = -Gene.Name)
 ```
 
-Filtering the experimenatl desgin file to include only informative columns of metadata, specifically sex and group(Trim-KO or WT)
+Filtering the experimental design file to include only informative columns of metadata, specifically sex and group(Trim-KO or WT)
 
 ```{r prepare metadata}
 metadata <- metadata %>% select('Sample.Characteristic.genotype.', 'Sample.Characteristic.sex.') %>%
@@ -117,18 +117,14 @@ ggplot(metadata, aes(fill = Group)) +
 #### Normalization to Counts Per Milion - to filter lowly expressed genes
 
 Normalize to CPM, excluding lowly expressed genes that have less than 3 CPM in at least 3 samples.
-Just to note, the authors wrote in the paper's method section that they have filtered for genes that had a read counts average that is lower than 30 CPM reads. I think that their cut-off is too strict, and leaves out important genes (including Klf14, which is one of the main findings of the paper, thus I've decided to follow with the threshold of 3 CPM in at least 3 samples.
+Just to note, the authors wrote in the paper's method section that they have filtered for genes with average read counts lower than 30 CPM reads. I think that their cut-off is too strict, and leaves out important genes (including Klf14, which is one of the main findings of the paper, thus I've decided to follow with the threshold of 3 CPM in at least 3 samples.
 
 ```{r normalize to cpm}
 cpm <- apply(counts, 2, 
              function(x) as.numeric(x)/sum(as.numeric(x)) * 10^6)
 
-colSums(cpm)
-
 thresh <- cpm >= 3
 keep <- rowSums(thresh) >= 3
-
-table(keep)
 
 counts.filtered = counts[keep,]
 dim(counts.filtered)
@@ -151,23 +147,19 @@ heatmap.corr <- pheatmap(correlationMatrix, annotation = select(metadata, c(Grou
                          annotation_colors = list(Group = c('WT' = "#178f92", Trim28KO = "#845d29"), 
                                                   Sex = c('male' = "lightgreen", 'female' = "salmon" )),
                          breaks = breaksList,
-                         # cluster_rows = FALSE,
-                         #cluster_cols = FALSE,
-                         
                          color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList)),
                          main = "Correlations Heatmap")
 
 ```
 
-#### Creating a DeseQ object for RNAseq differential expression analysis
+#### Creating a DESeq2 object for RNAseq differential expression analysis
 
-I combine the metadata and counts files into a DeseQ object.
-The experimental design takes into consideration Sex as a confounding factor.
+I combine the metadata and counts files into a DESeq2 object.
+The experimental design takes into consideration sex as a confounding factor.
 
 
-```{r initiate deseq2}
+```{r initiate deseq2, message=FALSE, warning=FALSE}
 metadata_filtered_samples <- subset(metadata, row.names(metadata) != ("ERR4873315"))
-#metadata_filtered_samples <- subset(metadata_filtered_samples, Sex != "male")
 
 subset_Samples <- as.vector(rownames(metadata_filtered_samples))
 subset_reads <- counts.filtered[, subset_Samples]
@@ -175,7 +167,6 @@ subset_reads <- counts.filtered[, subset_Samples]
 countdata.deseq <- DESeq2::DESeqDataSetFromMatrix(countData = subset_reads, 
                                                   colData = metadata_filtered_samples, 
                                                   design = ~ Group + Sex)
-
 
 dds <- DESeq(countdata.deseq)
 
@@ -193,17 +184,13 @@ plotDispEsts(dds)
 Samples with similar pattern of expression are closer to each other on the graph.
 I have Extracted the transformed values (using Variance stabilizing transformation) and selected the top 1000 most variable genes.
 
-
 The PCA plot shows that the samples are divided by sex, but also to some extent by their group.
 
 
 ```{r PCA}
-# Plot PCA 
-
 # Extracting transformed values, selecting top 1000 most variable genes
 
 vsd <- vst(dds, blind=FALSE, nsub = 1000)
-
 
 pcaData <- plotPCA(vsd, intgroup = c("Group", "Sex"), returnData = TRUE)
 
@@ -214,8 +201,6 @@ ggplot(pcaData, aes(x = PC1, y = PC2, color = Group)) +
         geom_point(size = 2, aes(shape = Sex)) +
         xlab(paste0("PC1: ", percentVar[1], "%")) + 
         ylab(paste0("PC2: ", percentVar[2], "%")) +
-        #geom_text(label = rownames(pcaData), size = 4, nudge_x = -5, nudge_y = 0.2, show.legend = FALSE)+
-        #stat_ellipse(geom = "polygon", type="norm", alpha=0.1, aes(fill=Group)) +
         labs(color = "Group") +
         guides(color = guide_legend(order = 1),
                shape = guide_legend(order = 2))+
@@ -224,6 +209,8 @@ ggplot(pcaData, aes(x = PC1, y = PC2, color = Group)) +
         theme_pubr(legend = "top")
                 
 ```
+
+
 #### Differential expression analysis
 
 First, we will compare between the WT and Trim-28 KO mice.
@@ -239,13 +226,11 @@ res_Group <- results(dds,
                lfcThreshold = 0)
 
 summary(res_Group)
-
-
 ```
 
 We will visualize the results using a volcano plot, coloring only genes that passed the threshold of p.value lower than 0.01, after FDR correction.
 
-```{r volacno}
+```{r volacno, message=FALSE, warning=FALSE}
 
 dds_res_all <- data.frame(res_Group) %>% 
         mutate(threshold = ifelse((padj < 0.01 & log2FoldChange < 0), "Downregulated", 
@@ -280,6 +265,8 @@ ggplot(dds_res_all) +
 
 
 ```
+
+
 As shown in the volcano plot, we can see that the results from the paper are reproduced, showing upregulation of Elovl3, Elovl7 and Olr1, and downregulation of KLf14.
 
 Interstingly, in the paper, the significantly upregulated Tcfl5 gene is not shown. Comparing my results with the published data at the 'Expression Atlas' we can see that it is indeed upregulated in both males and female mice. 
@@ -329,6 +316,8 @@ ggplot(data = data_boxplots_volcano, aes(x=Group_sex, y=Counts, fill = Group, co
         guides(fill = guide_legend(override.aes = list(size = 5)))
 
 ```
+
+
 A heatmap visualization of the differences between the groups show the different expression patterns between Trim28 KO and WT mice, and between males and females.
 
 ```{r heatmap}
@@ -348,9 +337,7 @@ heatmap.numClusters <- pheatmap(sig_norm_counts_dds,
                                 cluster_rows = T, 
                                 show_rownames = F,
                                 show_colnames = F,
-                                #labels_row = T,
                                 annotation = select(metadata, c(Group, Sex)), 
-                                #annotation_colors = list(Condition = c('none' = "lightblue3", immunized = "red3")),
                                 scale = "row")
 
 
@@ -364,7 +351,7 @@ I'm extracting the genes that passed a threshold of 0.01 adjusted p-value, creat
 Also, I'm using the 'AnnotationDbi' package to translate the gene IDs from ENSEMBLE to ENTREZID, so I could input them into the 'gprofiler2' enrichment functions.
 
 
-```{r enrichment prepare gene lists}
+```{r enrichment prepare gene lists, message=FALSE, warning=FALSE}
 library("AnnotationDbi")
 library(org.Mm.eg.db)
 
@@ -391,7 +378,7 @@ We can see (in REAC, blue), that Trim28 KO mice were downregulated in genes asso
 Looking at the enriched terms in the upregulated genes, we see enrichment of genes related to fatty-acid metabolism (REAC, blue). We can also observe an increase in terms (BP, orange) related to fatty acid metabolism process and very long chain fatty acids metabolic process (the Elovl gene family).  
 
 
-```{r visualize enrichment}
+```{r visualize enrichment, message=FALSE, warning=FALSE}
 
 library(gprofiler2)
 
@@ -414,7 +401,7 @@ Filtering out the male mice, I will showcase the sexual differences by finding t
 
 Filtering males and creating a new DESeq2 object.
 
-```{r initiate deseq2 females only}
+```{r initiate deseq2 females only, message=FALSE, warning=FALSE}
 metadata_filtered_samples <- subset(metadata_filtered_samples, Sex != "male")
 
 subset_Samples <- as.vector(rownames(metadata_filtered_samples))
@@ -423,7 +410,6 @@ subset_reads <- counts.filtered[, subset_Samples]
 countdata.deseq <- DESeq2::DESeqDataSetFromMatrix(countData = subset_reads, 
                                                   colData = metadata_filtered_samples, 
                                                   design = ~ Group)
-
 
 dds_f <- DESeq(countdata.deseq)
 
@@ -440,7 +426,6 @@ res_Females <- results(dds_f,
 
 summary(res_Females)
 
-
 ```
 visualizing the results in a volcano plot.
 
@@ -451,9 +436,7 @@ dds_res_females <- data.frame(res_Females) %>%
                                   ifelse((padj < 0.01 & log2FoldChange > 0), "Upregulated", "NS"))) %>%
         filter(!is.na(padj))
 
-
 dds_res_females <- left_join(rownames_to_column(dds_res_females), geneNames, by=c("rowname" = "Gene.ID"))
-
 
 ggplot(dds_res_females) + 
         geom_point(aes(x = log2FoldChange, y = -log10(padj), color = threshold)) + 
@@ -471,13 +454,13 @@ ggplot(dds_res_females) +
                   aes(log2FoldChange, -log10(padj), label = Gene.Name), 
                   vjust =1, size = 4)+
         scale_x_continuous(limits = c(-7,8))+
-        #scale_y_continuous(limits = c(-1,130))+
-        #scale_y_break(c(50,110))+
         geom_hline(yintercept = -log10(0.01), linetype = 2)+
         theme_pubr(legend = "right")
 
 
 ```
+
+
 We can see that Elovl3 is below the threshold, echoing the differences between male and female mice we saw in the boxplots earlier. 
 
 Now, I will look for genes that were differentially expressed between Trim KO and WT female mice, that were not significantly changed in male mice.
@@ -497,8 +480,6 @@ data_boxplots_volcano <- melt(countdata_normalized_counts[geneNames$Gene.ID[gene
 data_boxplots_volcano <- left_join(data_boxplots_volcano, rownames_to_column(metadata), by=c("Sample" = "rowname")) %>%
         left_join(geneNames[, c("Gene.ID", "Gene.Name")], by = "Gene.ID") %>%
         mutate(Group_sex = factor(paste(Group, Sex, sep = ", ")))
-
-
 
 ggplot(data = data_boxplots_volcano, aes(x=Group_sex, y=Counts, fill = Group, color = Group)) +
                geom_point(position=position_jitter(0.05)) + 
@@ -572,7 +553,7 @@ classtest <- DataFrame(condition = class[ind, ])
 
 create control and train the model. I'm using cross validation to account for the low sample size.
 
-```{r control and train model}
+```{r control and train model, message=FALSE, warning=FALSE}
 
 numFolds <- trainControl(method = "repeatedcv", number = 10, repeats = 5)
 
@@ -672,11 +653,15 @@ ggplot(data = data_boxplots, aes(x=Group_sex, y=Counts, fill = Group, color = Gr
 Overall, the results show different expression patterns in the committed adipocytes of Trim28-KO mice compared to the WT, dependent to some extent on the sex.
 
 DESeq2 analysis revealed sets of genes that were either up or down regulated in KO mice.
-Gene ontolgy enrichment analysis revealed that those genes are related to reduced cell motility and development and increase in fatty acid metabolism - specifically processes related to the metabolism of very long chain fatty acids.
+Gene ontology enrichment analysis revealed that those genes are related to reduced cell motility and development and increase in fatty acid metabolism - specifically processes related to the metabolism of very long chain fatty acids.
 
 These results suggest that Trim28 can modulate adipose tissue function in a sex-specific manner - contributing to obesity. 
 
 #### results are also available as a shiny app
+
+
 Github: https://github.com/ShaQasso/GenomicDS_course
+
+
 ShinyApp: https://shaqed-carasso.shinyapps.io/Final_trim28_project/ 
 
